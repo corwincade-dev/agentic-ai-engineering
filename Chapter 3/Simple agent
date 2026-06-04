@@ -1,0 +1,195 @@
+# chapter-03/simple_agent.py
+# This is the ENTIRE agent. No hidden complexity.
+# Run it with: python simple_agent.py
+
+from langchain.agents import create_react_agent, AgentExecutor
+from langchain.tools import tool
+from langchain_openai import ChatOpenAI
+from langchain_anthropic import ChatAnthropic
+from langchain.prompts import PromptTemplate
+import os
+
+# ------------------------------------------------------------------
+# STEP 1: DEFINE TOOLS
+# Tools are functions your agent can call.
+# The @tool decorator makes any function available to the agent.
+# The docstring (the text in triple quotes) is CRITICAL.
+# The agent reads the docstring to understand what the tool does.
+# ------------------------------------------------------------------
+
+@tool
+def get_weather(city: str) -> str:
+    """
+    Get the current weather for a city.
+    Use this tool when someone asks about weather conditions,
+    temperature, or forecasts.
+    
+    Args:
+        city: The name of the city (e.g., "Chicago", "London")
+    
+    Returns:
+        A string describing the current weather.
+    """
+    # In a real implementation, you would call a weather API here.
+    # For this example, we return simulated data.
+    weather_data = {
+        "chicago": "72°F and sunny",
+        "london": "58°F and cloudy",
+        "new york": "68°F and partly cloudy",
+        "tokyo": "75°F and humid",
+        "sydney": "82°F and clear",
+    }
+    city_lower = city.lower()
+    if city_lower in weather_data:
+        return f"The weather in {city} is {weather_data[city_lower]}."
+    else:
+        return f"I don't have weather data for {city}. Please try Chicago, London, New York, Tokyo, or Sydney."
+
+
+@tool
+def get_time(timezone: str) -> str:
+    """
+    Get the current time in a specific timezone.
+    Use this tool when someone asks about the current time,
+    what time it is, or timezone differences.
+    
+    Args:
+        timezone: The timezone (e.g., "America/Chicago", "Europe/London", "Asia/Tokyo")
+    
+    Returns:
+        The current time in that timezone.
+    """
+    # Simulated time data
+    import datetime
+    import pytz
+    
+    try:
+        tz = pytz.timezone(timezone)
+        current_time = datetime.datetime.now(tz)
+        return f"The current time in {timezone} is {current_time.strftime('%I:%M %p')}."
+    except:
+        # Fallback for common timezone names
+        timezone_map = {
+            "eastern": "America/New_York",
+            "central": "America/Chicago",
+            "mountain": "America/Denver",
+            "pacific": "America/Los_Angeles",
+            "london": "Europe/London",
+            "tokyo": "Asia/Tokyo",
+        }
+        mapped = timezone_map.get(timezone.lower(), timezone)
+        try:
+            tz = pytz.timezone(mapped)
+            current_time = datetime.datetime.now(tz)
+            return f"The current time in {timezone} is {current_time.strftime('%I:%M %p')}."
+        except:
+            return f"I don't have timezone data for '{timezone}'. Try 'America/Chicago' or 'Europe/London'."
+
+
+# ------------------------------------------------------------------
+# STEP 2: CREATE THE LANGUAGE MODEL
+# This is the "brain" of your agent.
+# You can use Claude (Anthropic), GPT (OpenAI), or a local model.
+# ------------------------------------------------------------------
+
+# Try Anthropic Claude first, fall back to OpenAI, then mock mode
+try:
+    if os.getenv("ANTHROPIC_API_KEY"):
+        llm = ChatAnthropic(model="claude-3-sonnet-20241022", temperature=0)
+        print("Using Anthropic Claude")
+    elif os.getenv("OPENAI_API_KEY"):
+        llm = ChatOpenAI(model="gpt-4", temperature=0)
+        print("Using OpenAI GPT-4")
+    else:
+        # Mock mode for learning without API keys
+        from langchain.llms.fake import FakeListLLM
+        responses = [
+            "I'll help you with that. Let me check the weather and time for you.",
+            "Based on the information, here is what I found."
+        ]
+        llm = FakeListLLM(responses=responses)
+        print("Using mock mode (no API key required, but less intelligent)")
+except Exception as e:
+    print(f"Error setting up LLM: {e}")
+    print("Falling back to mock mode")
+    from langchain.llms.fake import FakeListLLM
+    llm = FakeListLLM(responses=["I'll help with that."])
+
+
+# ------------------------------------------------------------------
+# STEP 3: CREATE THE PROMPT
+# The prompt tells the agent:
+# - Who it is (its role)
+# - What tools it has
+# - How to decide what to do
+# - How to format its response
+# ------------------------------------------------------------------
+
+prompt = PromptTemplate.from_template("""
+You are a helpful assistant that provides weather and time information.
+
+You have access to these tools:
+{tools}
+
+Use the following format:
+
+Question: the input question you must answer
+Thought: you should always think about what to do
+Action: the action to take, should be one of [{tool_names}]
+Action Input: the input to the action
+Observation: the result of the action
+... (this Thought/Action/Action Input/Observation can repeat N times)
+Thought: I now know the final answer
+Final Answer: the final answer to the original input question
+
+Always use tools when needed. Do not guess weather or time information.
+
+Begin!
+
+Question: {input}
+Thought: {agent_scratchpad}
+""")
+
+
+# ------------------------------------------------------------------
+# STEP 4: CREATE AND RUN THE AGENT
+# ------------------------------------------------------------------
+
+# Create the agent
+agent = create_react_agent(
+    llm=llm,
+    tools=[get_weather, get_time],
+    prompt=prompt
+)
+
+# Create an executor (handles the loop of calling the agent)
+executor = AgentExecutor(
+    agent=agent,
+    tools=[get_weather, get_time],
+    verbose=True,  # Set to False to hide internal steps
+    max_iterations=5,  # Prevent infinite loops
+    handle_parsing_errors=True
+)
+
+# ------------------------------------------------------------------
+# STEP 5: INTERACT WITH THE AGENT
+# ------------------------------------------------------------------
+
+if __name__ == "__main__":
+    print("\n" + "="*60)
+    print("WEATHER & TIME AGENT")
+    print("="*60)
+    print("\nAsk me about weather or time in any city.")
+    print("Type 'quit' to exit.\n")
+    
+    while True:
+        user_input = input("You: ")
+        if user_input.lower() in ['quit', 'exit', 'q']:
+            print("Goodbye!")
+            break
+        
+        try:
+            response = executor.invoke({"input": user_input})
+            print(f"\nAgent: {response['output']}\n")
+        except Exception as e:
+            print(f"\nError: {e}\n")
